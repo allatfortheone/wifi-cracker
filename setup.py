@@ -61,9 +61,9 @@ def start_deauth(iface, bssid):
 
 def monitor_mode(iface):
     """Enable monitor mode on the WiFi interface."""
-    subprocess.run(["ifconfig", iface, "down"])
-    subprocess.run(["iwconfig", iface, "mode", "monitor"])
-    subprocess.run(["ifconfig", iface, "up"])
+    subprocess.run(["ip", "link", "set", iface, "down"])
+    subprocess.run(["iw", iface, "set", "monitor", "none"])
+    subprocess.run(["ip", "link", "set", iface, "up"])
     print(f"Monitor mode enabled on {iface}")
 
 def crack_password(cap_file, wordlist):
