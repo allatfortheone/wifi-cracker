@@ -78,8 +78,8 @@ def crack_password(cap_file, wordlist):
         print("Password cracking failed:", stderr.decode())
         
 def scan_networks(iface):
-    """Scan for available WiFi networks using iwlist."""
-    cmd = ["iwlist", iface, "scan"]
+    """Scan for available WiFi networks using nmcli."""
+    cmd = ["nmcli", "device", "wifi", "list", "ifname", iface]
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     stdout, stderr = proc.communicate()
     if proc.returncode == 0:
